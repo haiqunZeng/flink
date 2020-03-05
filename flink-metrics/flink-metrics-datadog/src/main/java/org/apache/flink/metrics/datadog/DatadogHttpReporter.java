@@ -55,7 +55,11 @@ public class DatadogHttpReporter implements MetricReporter, Scheduled {
 	private DatadogHttpClient client;
 	private List<String> configTags;
 
+	private final Clock clock = () -> System.currentTimeMillis() / 1000L;
+
 	public static final String API_KEY = "apikey";
+	public static final String PROXY_HOST = "proxyHost";
+	public static final String PROXY_PORT = "proxyPort";
 	public static final String TAGS = "tags";
 
 	@Override
@@ -68,14 +72,14 @@ public class DatadogHttpReporter implements MetricReporter, Scheduled {
 
 		if (metric instanceof Counter) {
 			Counter c = (Counter) metric;
-			counters.put(c, new DCounter(c, name, host, tags));
+			counters.put(c, new DCounter(c, name, host, tags, clock));
 		} else if (metric instanceof Gauge) {
 			Gauge g = (Gauge) metric;
-			gauges.put(g, new DGauge(g, name, host, tags));
+			gauges.put(g, new DGauge(g, name, host, tags, clock));
 		} else if (metric instanceof Meter) {
 			Meter m = (Meter) metric;
 			// Only consider rate
-			meters.put(m, new DMeter(m, name, host, tags));
+			meters.put(m, new DMeter(m, name, host, tags, clock));
 		} else if (metric instanceof Histogram) {
 			LOGGER.warn("Cannot add {} because Datadog HTTP API doesn't support Histogram", metricName);
 		} else {
@@ -102,10 +106,16 @@ public class DatadogHttpReporter implements MetricReporter, Scheduled {
 
 	@Override
 	public void open(MetricConfig config) {
-		client = new DatadogHttpClient(config.getString(API_KEY, null));
-		LOGGER.info("Configured DatadogHttpReporter");
+		String apiKey = config.getString(API_KEY, null);
+		String proxyHost = config.getString(PROXY_HOST, null);
+		Integer proxyPort = config.getInteger(PROXY_PORT, 8080);
+		String tags = config.getString(TAGS, "");
 
-		configTags = getTagsFromConfig(config.getString(TAGS, ""));
+		client = new DatadogHttpClient(apiKey, proxyHost, proxyPort, true);
+
+		configTags = getTagsFromConfig(tags);
+
+		LOGGER.info("Configured DatadogHttpReporter with {tags={}, proxyHost={}, proxyPort={}}", tags, proxyHost, proxyPort);
 	}
 
 	@Override
@@ -116,8 +126,24 @@ public class DatadogHttpReporter implements MetricReporter, Scheduled {
 
 	@Override
 	public void report() {
-		DatadogHttpRequest request = new DatadogHttpRequest();
+		DSeries request = new DSeries();
 
+		addGaugesAndUnregisterOnException(request);
+		counters.values().forEach(request::addCounter);
+		meters.values().forEach(request::addMeter);
+
+		try {
+			client.send(request);
+			LOGGER.debug("Reported series with size {}.", request.getSeries().size());
+		} catch (SocketTimeoutException e) {
+			LOGGER.warn("Failed reporting metrics to Datadog because of socket timeout: {}", e.getMessage());
+		} catch (Exception e) {
+			LOGGER.warn("Failed reporting metrics to Datadog.", e);
+		}
+	}
+
+	private void addGaugesAndUnregisterOnException(DSeries request) {
+		List<Gauge> gaugesToRemove = new ArrayList<>();
 		for (Map.Entry<Gauge, DGauge> entry : gauges.entrySet()) {
 			DGauge g = entry.getValue();
 			try {
@@ -125,27 +151,19 @@ public class DatadogHttpReporter implements MetricReporter, Scheduled {
 				// Flink uses Gauge to store many types other than Number
 				g.getMetricValue();
 				request.addGauge(g);
+			} catch (ClassCastException e) {
+				LOGGER.info("The metric {} will not be reported because only number types are supported by this reporter.", g.getMetric());
+				gaugesToRemove.add(entry.getKey());
 			} catch (Exception e) {
-				// Remove that Gauge if it's not of Number type
-				gauges.remove(entry.getKey());
+				if (LOGGER.isDebugEnabled()) {
+					LOGGER.debug("The metric {} will not be reported because it threw an exception.", g.getMetric(), e);
+				} else {
+					LOGGER.info("The metric {} will not be reported because it threw an exception.", g.getMetric());
+				}
+				gaugesToRemove.add(entry.getKey());
 			}
 		}
-
-		for (DCounter c : counters.values()) {
-			request.addCounter(c);
-		}
-
-		for (DMeter m : meters.values()) {
-			request.addMeter(m);
-		}
-
-		try {
-			client.send(request);
-		} catch (SocketTimeoutException e) {
-			LOGGER.warn("Failed reporting metrics to Datadog because of socket timeout.", e.getMessage());
-		} catch (Exception e) {
-			LOGGER.warn("Failed reporting metrics to Datadog.", e);
-		}
+		gaugesToRemove.forEach(gauges::remove);
 	}
 
 	/**
@@ -179,32 +197,5 @@ public class DatadogHttpReporter implements MetricReporter, Scheduled {
 	 */
 	private String getVariableName(String str) {
 		return str.substring(1, str.length() - 1);
-	}
-
-	/**
-	 * Compact metrics in batch, serialize them, and send to Datadog via HTTP.
-	 */
-	static class DatadogHttpRequest {
-		private final DSeries series;
-
-		public DatadogHttpRequest() {
-			series = new DSeries();
-		}
-
-		public void addGauge(DGauge gauge) {
-			series.addMetric(gauge);
-		}
-
-		public void addCounter(DCounter counter) {
-			series.addMetric(counter);
-		}
-
-		public void addMeter(DMeter meter) {
-			series.addMetric(meter);
-		}
-
-		public DSeries getSeries() {
-			return series;
-		}
 	}
 }

@@ -37,20 +37,10 @@ else
  NUM_SLOTS=$NEW_DOP
 fi
 
-change_conf "taskmanager.numberOfTaskSlots" "1" "${NUM_SLOTS}"
+set_config_key "taskmanager.numberOfTaskSlots" "${NUM_SLOTS}"
+set_config_key "metrics.fetcher.update-interval" "2000"
 setup_flink_slf4j_metric_reporter
 start_cluster
-
-function test_cleanup {
-  # don't call ourselves again for another signal interruption
-  trap "exit -1" INT
-  # don't call ourselves again for normal exit
-  trap "" EXIT
-
-  rollback_flink_slf4j_metric_reporter
-}
-trap test_cleanup INT
-trap test_cleanup EXIT
 
 CHECKPOINT_DIR="$TEST_DATA_DIR/externalized-chckpt-e2e-backend-dir"
 CHECKPOINT_DIR_URI="file://$CHECKPOINT_DIR"
@@ -100,27 +90,21 @@ fi
 
 DATASTREAM_JOB=$($JOB_CMD | grep "Job has been submitted with JobID" | sed 's/.* //g')
 
-wait_job_running $DATASTREAM_JOB
-
 if [[ $SIMULATE_FAILURE == "true" ]]; then
   wait_job_terminal_state $DATASTREAM_JOB FAILED
 else
+  wait_job_running $DATASTREAM_JOB
   wait_num_checkpoints $DATASTREAM_JOB 1
   wait_oper_metric_num_in_records SemanticsCheckMapper.0 200
 
   cancel_job $DATASTREAM_JOB
 fi
 
-CHECKPOINT_PATH=$(ls -d $CHECKPOINT_DIR/$DATASTREAM_JOB/chk-[1-9]*)
+# take the latest checkpoint
+CHECKPOINT_PATH=$(find_latest_completed_checkpoint ${CHECKPOINT_DIR}/${DATASTREAM_JOB})
 
 if [ -z $CHECKPOINT_PATH ]; then
   echo "Expected an externalized checkpoint to be present, but none exists."
-  exit 1
-fi
-
-NUM_CHECKPOINTS=$(echo $CHECKPOINT_PATH | wc -l | tr -d ' ')
-if (( $NUM_CHECKPOINTS > 1 )); then
-  echo "Expected only exactly 1 externalized checkpoint to be present, but $NUM_CHECKPOINTS exists."
   exit 1
 fi
 
@@ -140,6 +124,11 @@ else
 fi
 
 DATASTREAM_JOB=$($JOB_CMD | grep "Job has been submitted with JobID" | sed 's/.* //g')
+
+if [ -z $DATASTREAM_JOB ]; then
+    echo "Resuming from externalized checkpoint job could not be started."
+    exit 1
+fi
 
 wait_job_running $DATASTREAM_JOB
 wait_oper_metric_num_in_records SemanticsCheckMapper.0 200

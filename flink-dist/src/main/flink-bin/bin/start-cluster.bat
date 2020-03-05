@@ -20,10 +20,11 @@
 setlocal EnableDelayedExpansion
 
 SET bin=%~dp0
-SET FLINK_ROOT_DIR=%bin%..
-SET FLINK_LIB_DIR=%FLINK_ROOT_DIR%\lib
-SET FLINK_CONF_DIR=%FLINK_ROOT_DIR%\conf
-SET FLINK_LOG_DIR=%FLINK_ROOT_DIR%\log
+SET FLINK_HOME=%bin%..
+SET FLINK_LIB_DIR=%FLINK_HOME%\lib
+SET FLINK_PLUGINS_DIR=%FLINK_HOME%\plugins
+SET FLINK_CONF_DIR=%FLINK_HOME%\conf
+SET FLINK_LOG_DIR=%FLINK_HOME%\log
 
 SET JVM_ARGS=-Xms1024m -Xmx1024m
 
@@ -38,8 +39,8 @@ SET outname_tm=flink-%username%-taskmanager.out
 SET out_jm=%FLINK_LOG_DIR%\%outname_jm%
 SET out_tm=%FLINK_LOG_DIR%\%outname_tm%
 
-SET log_setting_jm=-Dlog.file="%log_jm%" -Dlogback.configurationFile=file:"%FLINK_CONF_DIR%/logback.xml" -Dlog4j.configuration=file:"%FLINK_CONF_DIR%/log4j.properties"
-SET log_setting_tm=-Dlog.file="%log_tm%" -Dlogback.configurationFile=file:"%FLINK_CONF_DIR%/logback.xml" -Dlog4j.configuration=file:"%FLINK_CONF_DIR%/log4j.properties"
+SET log_setting_jm=-Dlog.file="%log_jm%" -Dlogback.configurationFile=file:"%FLINK_CONF_DIR%/logback.xml" -Dlog4j.configuration=file:"%FLINK_CONF_DIR%/log4j.properties" -Dlog4j.configurationFile=file:"%FLINK_CONF_DIR%/log4j.properties"
+SET log_setting_tm=-Dlog.file="%log_tm%" -Dlogback.configurationFile=file:"%FLINK_CONF_DIR%/logback.xml" -Dlog4j.configuration=file:"%FLINK_CONF_DIR%/log4j.properties" -Dlog4j.configurationFile=file:"%FLINK_CONF_DIR%/log4j.properties"
 
 :: Log rotation (quick and dirty)
 CD "%FLINK_LOG_DIR%"
